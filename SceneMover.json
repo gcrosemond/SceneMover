@@ -1,0 +1,19 @@
+{
+  "roots": [
+    {
+      "id": "id_otlv6hs",
+      "label": "Scenes",
+      "path": "/Volumes/External 5T/scenes",
+      "template": "{studio}/{title} - {_performers} [{_date}] {height}p.{ext}",
+      "isDefault": false
+    },
+    {
+      "id": "id_j0mb0l7",
+      "label": "Local Root",
+      "path": "/Users/xbasty/Library/.msc/__scenes",
+      "template": "{studio}/{title} - {_performers} [{_date}] {height}p.{ext}",
+      "isDefault": true
+    }
+  ],
+  "rules": []
+}

@@ -1,0 +1,16 @@
+id: SceneMover
+name: SceneMover
+metadata:
+  description: Move and rename scene files based on ordered rules (studio, favourite
+    performer, tags) with per-root path templates. Updates Stash file paths after
+    moving.
+version: 1.0-cebca8d
+date: "2026-03-16 23:38:03"
+requires: []
+source_repository: https://zzzinscode.github.io/stashapp-plugins/main/index.yml
+files:
+- SceneMover.yml
+- SceneMover.json
+- README.md
+- SceneMover.py
+- SceneMover.js
