@@ -5,15 +5,24 @@
       "label": "Scenes",
       "path": "/Volumes/External 5T/scenes",
       "template": "{studio}/{title} - {_performers} [{_date}] {height}p.{ext}",
-      "isDefault": false
+      "isDefault": true
     },
     {
       "id": "id_j0mb0l7",
       "label": "Local Root",
       "path": "/Users/xbasty/Library/.msc/__scenes",
       "template": "{studio}/{title} - {_performers} [{_date}] {height}p.{ext}",
-      "isDefault": true
+      "isDefault": false
     }
   ],
-  "rules": []
+  "rules": [
+    {
+      "id": "id_nxfwfv4",
+      "label": "Local Files",
+      "condition": "file_under_dir",
+      "value": "/Users/xbasty/Library/.msc",
+      "rootId": "id_j0mb0l7",
+      "enabled": true
+    }
+  ]
 }

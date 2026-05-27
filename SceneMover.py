@@ -178,6 +178,15 @@ def get_favourite_performers(scene):
         key=str.lower
     )
 
+def _norm_dir_for_match(path):
+    p = (path or "").strip().replace("\\", "/").lower()
+    if not p:
+        return ""
+    # Keep root "/" intact; trim trailing separators elsewhere.
+    if p != "/":
+        p = p.rstrip("/")
+    return p
+
 def scene_matches_rule(scene, rule):
     condition = rule.get("condition", "")
     value     = rule.get("value", "").strip().lower()
@@ -204,6 +213,16 @@ def scene_matches_rule(scene, rule):
     elif condition == "has_group":
         group_ids = [g["group"]["id"] for g in scene.get("groups", []) if g.get("group")]
         return value in group_ids
+
+    elif condition == "file_under_dir":
+        target = _norm_dir_for_match(value)
+        if not target:
+            return False
+        for f in scene.get("files", []):
+            file_dir = _norm_dir_for_match(os.path.dirname(f.get("path", "")))
+            if file_dir == target or file_dir.startswith(target + "/"):
+                return True
+        return False
 
     return False
 
@@ -438,7 +457,9 @@ def clean_rendered(s):
         prefix = "/"
         body = s_norm[1:]
 
-    parts = [p.strip('. ') for p in body.split('/') if p]
+    # Do not strip leading dots: hidden dirs/files like ".msc" must stay intact.
+    # Only trim whitespace and trailing dots (mainly to avoid Windows-invalid endings).
+    parts = [p.rstrip('. ').lstrip() for p in body.split('/') if p]
 
     if prefix in ("//", "/"):
         base = prefix + "/".join(parts)

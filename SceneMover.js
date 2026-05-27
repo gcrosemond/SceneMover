@@ -118,6 +118,13 @@
     return b;
   }
 
+  function pathSepForRoot(rootPath) {
+    const p = rootPath || "";
+    if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\")) return "\\";
+    if (p.includes("\\") && !p.includes("/")) return "\\";
+    return "/";
+  }
+
   // Optional group syntax: [[ ... ]]
   // A group is kept only if at least one token inside has a non-empty value.
   function applyOptionalBlocks(tmpl, tok) {
@@ -324,6 +331,7 @@
     ["studio_contains",        "Studio contains"],
     ["tag_equals",             "Has tag"],
     ["performer_equals",       "Performer equals"],
+    ["file_under_dir",         "File under directory"],
     ["has_group",              "Has group"],
   ];
   const NEEDS_VALUE = new Set([
@@ -331,6 +339,7 @@
     "studio_contains",
     "tag_equals",
     "performer_equals",
+    "file_under_dir",
     "has_group"
   ]);
 
@@ -652,6 +661,20 @@
 
     async function buildPreviewPlans(sceneId, srcPath, cfg) {
       // Rule engine helpers (mirrors overlay IIFE — can't cross IIFE boundaries)
+      function normDirForMatch(p) {
+        let s = (p || "").replace(/\\/g, "/").toLowerCase().trim();
+        if (!s) return "";
+        if (s !== "/") s = s.replace(/\/+$/, "");
+        return s;
+      }
+      function fileUnderDir(scene, dir) {
+        const target = normDirForMatch(dir);
+        if (!target) return false;
+        return (scene.files || []).some(f => {
+          const fileDir = normDirForMatch((f.path || "").replace(/[/\\][^/\\]*$/, ""));
+          return fileDir === target || fileDir.startsWith(target + "/");
+        });
+      }
       function resolveRoot(scene) {
         const rootMap = {};
         (cfg.roots || []).forEach(r => rootMap[r.id] = r);
@@ -664,6 +687,7 @@
           else if (rule.condition === "studio_contains")        hit = ((scene.studio && scene.studio.name) || "").toLowerCase().includes(val);
           else if (rule.condition === "tag_equals")             hit = (scene.tags || []).some(t => t.name.toLowerCase().trim() === val);
           else if (rule.condition === "performer_equals")       hit = (scene.performers || []).some(p => p.name.toLowerCase().trim() === val);
+          else if (rule.condition === "file_under_dir")         hit = fileUnderDir(scene, rule.value || "");
           else if (rule.condition === "has_group")              hit = (scene.groups || []).some(g => g.group && g.group.id === rule.value);
           if (hit && rootMap[rule.rootId]) return rootMap[rule.rootId];
         }
@@ -719,9 +743,10 @@
         for (const file of (scene.files || [])) {
           if (!root) { plans.push({ title: scene.title, src: file.path, skip: true, reason: "No matching root" }); continue; }
           const rendered = renderTemplate(root.template || "", scene, file);
+          const sep = pathSepForRoot(root.path || "");
           const parts = rendered.replace(/\\/g, "/").split("/");
-          const destFolder = [root.path.replace(/[/\\]+$/, ""), ...parts.slice(0, -1)].join("\\");
-          const dest = destFolder + "\\" + parts[parts.length - 1];
+          const destFolder = [root.path.replace(/[/\\]+$/, ""), ...parts.slice(0, -1)].join(sep);
+          const dest = destFolder + sep + parts[parts.length - 1];
           const same = file.path.replace(/\\/g,"/").toLowerCase() === dest.replace(/\\/g,"/").toLowerCase();
           plans.push({ title: scene.title, src: file.path, dest, skip: same, reason: same ? "Already correct" : null });
         }
@@ -869,6 +894,20 @@
 
   function normPath(p) { return (p || "").replace(/\\/g, "/").toLowerCase(); }
   function san(s)      { return (s || "").replace(/[\\/:*?"<>|]/g, "").trim(); }
+  function normDirForMatch(p) {
+    let s = (p || "").replace(/\\/g, "/").toLowerCase().trim();
+    if (!s) return "";
+    if (s !== "/") s = s.replace(/\/+$/, "");
+    return s;
+  }
+  function fileUnderDir(scene, dir) {
+    const target = normDirForMatch(dir);
+    if (!target) return false;
+    return (scene.files || []).some(f => {
+      const fileDir = normDirForMatch((f.path || "").replace(/[/\\][^/\\]*$/, ""));
+      return fileDir === target || fileDir.startsWith(target + "/");
+    });
+  }
 
   function loadCfg() {
     try {
@@ -890,6 +929,7 @@
       else if (rule.condition === "studio_contains")        hit = ((scene.studio && scene.studio.name) || "").toLowerCase().includes(val);
       else if (rule.condition === "tag_equals")             hit = (scene.tags || []).some(t => t.name.toLowerCase().trim() === val);
       else if (rule.condition === "performer_equals")       hit = (scene.performers || []).some(p => p.name.toLowerCase().trim() === val);
+      else if (rule.condition === "file_under_dir")         hit = fileUnderDir(scene, rule.value || "");
       else if (rule.condition === "has_group")              hit = (scene.groups || []).some(g => g.group && g.group.id === rule.value);
       if (hit && rootMap[rule.rootId]) return rootMap[rule.rootId];
     }
@@ -898,8 +938,8 @@
 
   const WIN_MAX_PATH = 259;
 
-  function fitToMaxPath(destFolder, basename, tmpl, scene, file) {
-    const full = destFolder + "\\" + basename;
+  function fitToMaxPath(destFolder, basename, tmpl, scene, file, sep = "\\") {
+    const full = destFolder + sep + basename;
     if (full.length <= WIN_MAX_PATH) return basename;
 
     const studio  = san((scene.studio && scene.studio.name) || "");
@@ -940,10 +980,10 @@
     const overflow1 = full.length - WIN_MAX_PATH;
     const titleTrimmed = titleFull.slice(0, Math.max(0, titleFull.length - overflow1)).trimEnd();
     const b1 = tryBuild(titleTrimmed, perfsFull);
-    if ((destFolder + "\\" + b1).length <= WIN_MAX_PATH) return b1;
+    if ((destFolder + sep + b1).length <= WIN_MAX_PATH) return b1;
 
     // Step 2: trim performers too
-    const full2 = destFolder + "\\" + b1;
+    const full2 = destFolder + sep + b1;
     const overflow2 = full2.length - WIN_MAX_PATH;
     const perfsTrimmed = perfsFull.slice(0, Math.max(0, perfsFull.length - overflow2)).trimEnd();
     return tryBuild("", perfsTrimmed);
@@ -981,12 +1021,13 @@
 
   // Build dest path applying MAX_PATH truncation, mirrors Python fit_to_max_path
   function buildDest(root, scene, file) {
+    const sep = pathSepForRoot(root.path || "");
     const rendered = renderTmpl(root.template || "", scene, file);
     const parts = rendered.replace(/\\/g, "/").split("/");
-    const destFolder = [root.path.replace(/[/\\]+$/, ""), ...parts.slice(0, -1)].join("\\");
+    const destFolder = [root.path.replace(/[/\\]+$/, ""), ...parts.slice(0, -1)].join(sep);
     const rawBasename = parts[parts.length - 1];
-    const basename = fitToMaxPath(destFolder, rawBasename, root.template || "", scene, file);
-    return { destFolder, basename, dest: destFolder + "\\" + basename };
+    const basename = fitToMaxPath(destFolder, rawBasename, root.template || "", scene, file, sep);
+    return { destFolder, basename, dest: destFolder + sep + basename };
   }
 
   function checkScene(scene, cfg) {
