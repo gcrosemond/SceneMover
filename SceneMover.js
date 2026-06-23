@@ -531,6 +531,11 @@
         const pickerLabel = el("div","font-size:0.72em;color:#5c6370;margin-bottom:3px;","Click a token to insert at cursor:");
         card.appendChild(pickerLabel);
         card.appendChild(buildTokenPicker(tmplIn));
+        card.appendChild(el(
+          "div",
+          "font-size:0.72em;color:#7f848e;margin-top:6px;line-height:1.45;",
+          "Syntax: use {_token} to make a single token optional, or [[ ... ]] to keep a whole block only when at least one token inside has a value. Example: [[ - {_performers}]][ [{_date}]]."
+        ));
 
         rootsList.appendChild(card);
       });
