@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import traceback
 import requests
 
 PLUGIN_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -35,6 +36,24 @@ def warn(msg):
 
 def err(msg):
     print(f"[SceneMover][ERROR] {msg}", file=sys.stderr, flush=True)
+
+def format_exception_details(exc):
+    details = [f"{type(exc).__name__}: {exc}"]
+
+    response = getattr(exc, "response", None)
+    if response is not None:
+        try:
+            body = response.text.strip()
+        except Exception:
+            body = ""
+        if body:
+            details.append(f"HTTP body: {body}")
+
+    tb = traceback.format_exc().strip()
+    if tb and tb != "NoneType: None":
+        details.append(f"Traceback:\n{tb}")
+
+    return "\n".join(details)
 
 # ---------------------------------------------------------------------------
 # Plugin input
@@ -73,7 +92,23 @@ def gql(query, variables=None):
     resp.raise_for_status()
     data = resp.json()
     if "errors" in data:
-        raise RuntimeError(f"GraphQL error: {data['errors']}")
+        messages = []
+        for item in data["errors"]:
+            if isinstance(item, dict):
+                msg = item.get("message") or repr(item)
+                path = item.get("path")
+                ext = item.get("extensions")
+                extra = []
+                if path:
+                    extra.append(f"path={path}")
+                if ext:
+                    extra.append(f"extensions={ext}")
+                if extra:
+                    msg += " (" + ", ".join(extra) + ")"
+                messages.append(msg)
+            else:
+                messages.append(str(item))
+        raise RuntimeError("GraphQL error: " + " | ".join(messages))
     return data.get("data", {})
 
 # ---------------------------------------------------------------------------
@@ -186,6 +221,23 @@ def _norm_dir_for_match(path):
     if p != "/":
         p = p.rstrip("/")
     return p
+
+def is_absolute_template_path(path):
+    p = (path or "").replace("\\", "/")
+    return p.startswith("/") or p.startswith("//") or bool(re.match(r"^[A-Za-z]:/", p))
+
+def resolve_destination_base(root_path, rendered_path, src_path):
+    root_path = (root_path or "").strip()
+    if root_path:
+        return os.path.normpath(root_path)
+    if is_absolute_template_path(rendered_path):
+        rendered_norm = rendered_path.replace("\\", "/")
+        if rendered_norm.startswith("//"):
+            return "//"
+        if rendered_norm.startswith("/"):
+            return os.sep
+        return ""
+    raise ValueError("Relative template requires a configured root path")
 
 def scene_matches_rule(scene, rule):
     condition = rule.get("condition", "")
@@ -367,7 +419,7 @@ def build_destination(root, scene, file_rec, config):
     filename = parts[-1] if parts else os.path.basename(file_rec.get("path", "")) or "scene"
     subpath_parts = parts[:-1] if len(parts) > 1 else []
 
-    root_path = os.path.normpath(root["path"])
+    root_path = resolve_destination_base(root.get("path", ""), rendered, file_rec.get("path", ""))
     dest_folder = os.path.join(root_path, *subpath_parts) if subpath_parts else root_path
 
     # Ensure filename has extension
@@ -459,7 +511,13 @@ def clean_rendered(s):
 
     # Do not strip leading dots: hidden dirs/files like ".msc" must stay intact.
     # Only trim whitespace and trailing dots (mainly to avoid Windows-invalid endings).
-    parts = [p.rstrip('. ').lstrip() for p in body.split('/') if p]
+    parts = []
+    for raw in body.split('/'):
+        if not raw:
+            continue
+        cleaned = raw.rstrip('. ').lstrip()
+        if cleaned:
+            parts.append(cleaned)
 
     if prefix in ("//", "/"):
         base = prefix + "/".join(parts)
@@ -523,7 +581,7 @@ def fit_to_max_path(dest_folder, dest_basename, scene, file_rec, root, config):
         parts  = [p for p in result.replace("\\", "/").split("/") if p]
         fname  = clean_rendered(parts[-1]) if parts else (os.path.basename(file_rec.get("path", "")) or "scene")
         sub_parts = parts[:-1] if len(parts) > 1 else []
-        root_path = os.path.normpath(root["path"])
+        root_path = resolve_destination_base(root.get("path", ""), result, file_rec.get("path", ""))
         folder = os.path.join(root_path, *sub_parts) if sub_parts else root_path
         return folder, fname
 
@@ -582,7 +640,19 @@ def plan_moves(scenes, config):
                 })
                 continue
 
-            dest_folder, dest_basename = build_destination(root, scene, f, config)
+            try:
+                dest_folder, dest_basename = build_destination(root, scene, f, config)
+            except ValueError as e:
+                plans.append({
+                    "scene_id":      scene["id"],
+                    "scene_title":   scene.get("title") or "",
+                    "file_id":       f["id"],
+                    "src_path":      f["path"],
+                    "dest_folder":   None,
+                    "dest_basename": None,
+                    "skip_reason":   str(e),
+                })
+                continue
             dest_folder   = clean_rendered(dest_folder)
             dest_basename = clean_rendered(dest_basename)
             dest_folder, dest_basename = fit_to_max_path(dest_folder, dest_basename, scene, f, root, config)
@@ -662,7 +732,6 @@ def cleanup_empty_dirs(path, config):
         p = r.get("path", "").strip()
         if p:
             root_paths.add(os.path.normcase(os.path.normpath(p)))
-
     folder = os.path.normpath(path)
     while True:
         norm = os.path.normcase(folder)
@@ -776,8 +845,14 @@ def apply_moves(plans, config):
                 log(f"  Skipped: destination already exists (path too long for os.path.exists or cross-scene conflict)")
                 results.append({**plan, "status": "skipped", "skip_reason": "Destination already exists"})
             else:
-                err(f"  Move failed: {e}")
-                results.append({**plan, "status": "error", "error": err_str})
+                err("  Move failed.")
+                err(f"    scene_id={plan['scene_id']} file_id={plan['file_id']}")
+                err(f"    src={src_path}")
+                err(f"    dest_folder={dest_folder}")
+                err(f"    dest_basename={dest_basename}")
+                err(f"    dest_path={dest_path}")
+                err(format_exception_details(e))
+                results.append({**plan, "status": "error", "error": format_exception_details(e)})
 
     return results
 

@@ -2,26 +2,34 @@
   "roots": [
     {
       "id": "id_otlv6hs",
-      "label": "Scenes",
+      "label": "5T Sorted",
       "path": "/Volumes/External 5T/scenes",
       "template": "{studio}/{title} - {_performers} [{_date}] {height}p.{ext}",
-      "isDefault": true
+      "isDefault": false
     },
     {
       "id": "id_j0mb0l7",
-      "label": "Local Root",
-      "path": "/Users/xbasty/Library/.msc/__scenes",
-      "template": "{studio}/{title} - {_performers} [{_date}] {height}p.{ext}",
-      "isDefault": false
+      "label": "Local Sorted",
+      "path": "/Users/xbasty/Library/.msc/__sorted",
+      "template": "{studio} - {title} - {_performers} [{_date}] {height}p.{ext}",
+      "isDefault": true
     }
   ],
   "rules": [
     {
-      "id": "id_nxfwfv4",
-      "label": "Local Files",
+      "id": "id_wy9tkad",
+      "label": "Local",
       "condition": "file_under_dir",
       "value": "/Users/xbasty/Library/.msc",
       "rootId": "id_j0mb0l7",
+      "enabled": true
+    },
+    {
+      "id": "id_8algtdi",
+      "label": "5T",
+      "condition": "file_under_dir",
+      "value": "/Volumes/External 5T/_scenes - unsorted",
+      "rootId": "id_otlv6hs",
       "enabled": true
     }
   ]

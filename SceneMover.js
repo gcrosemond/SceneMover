@@ -125,6 +125,101 @@
     return "/";
   }
 
+  function isAbsoluteTemplatePath(path) {
+    const p = (path || "").replace(/\\/g, "/");
+    return p.startsWith("/") || p.startsWith("//") || /^[A-Za-z]:\//.test(p);
+  }
+
+  function resolveDestinationBase(rootPath, renderedPath, srcPath) {
+    const root = (rootPath || "").trim();
+    if (root) return root.replace(/[/\\]+$/, "");
+    const rendered = (renderedPath || "").replace(/\\/g, "/");
+    if (isAbsoluteTemplatePath(rendered)) {
+      if (rendered.startsWith("//")) return "//";
+      if (rendered.startsWith("/")) return "/";
+      return "";
+    }
+    throw new Error("Relative template requires a configured root path");
+  }
+
+  function joinDestFolder(baseFolder, subParts, sep) {
+    if (!subParts.length) return baseFolder;
+    if (baseFolder === "/" && sep === "/") return "/" + subParts.join("/");
+    if (baseFolder === "//" && sep === "/") return "//" + subParts.join("/");
+    if (!baseFolder) return subParts.join(sep);
+    return [baseFolder, ...subParts].join(sep);
+  }
+
+  function joinDestPath(destFolder, basename, sep) {
+    if (!destFolder) return basename;
+    if (destFolder === "/" && sep === "/") return "/" + basename;
+    if (destFolder === "//" && sep === "/") return "//" + basename;
+    return destFolder + sep + basename;
+  }
+
+  function getSceneContainer(node) {
+    let el = node && node.nodeType === 1 ? node : node?.parentElement;
+    if (!el) return null;
+
+    const explicit = el.closest("article, .card, tr, li, [role='row']");
+    if (explicit) return explicit;
+
+    let candidate = el;
+    while (candidate && candidate.parentElement && candidate.parentElement !== document.body) {
+      const display = getComputedStyle(candidate).display;
+      const parent = candidate.parentElement;
+      const hasSingleSceneLink = parent.querySelectorAll("a[href*='/scene/'], a[href*='/scenes/']").length <= 1;
+      if (hasSingleSceneLink && ["block", "flex", "grid", "table-row", "list-item"].includes(display)) {
+        return candidate;
+      }
+      candidate = parent;
+    }
+
+    return el.parentElement || el;
+  }
+
+  function extractSceneIdFromValue(value) {
+    const m = String(value || "").match(/(?:^|\/)scenes?\/(\d+)(?:\/|$|[?#])/);
+    return m ? m[1] : null;
+  }
+
+  function extractSceneIdFromElement(el) {
+    if (!el || el.nodeType !== 1) return null;
+
+    const directValues = [
+      el.getAttribute?.("href"),
+      el.getAttribute?.("src"),
+      el.getAttribute?.("poster"),
+      el.getAttribute?.("data-id"),
+      el.getAttribute?.("data-scene-id"),
+      el.id,
+    ];
+    for (const value of directValues) {
+      const id = extractSceneIdFromValue(value);
+      if (id) return id;
+    }
+
+    const descendants = el.querySelectorAll("[href], [src], [poster], [data-id], [data-scene-id], video, img, source");
+    for (const node of descendants) {
+      const values = [
+        node.getAttribute?.("href"),
+        node.getAttribute?.("src"),
+        node.getAttribute?.("poster"),
+        node.getAttribute?.("data-id"),
+        node.getAttribute?.("data-scene-id"),
+        node.src,
+        node.currentSrc,
+        node.poster,
+      ];
+      for (const value of values) {
+        const id = extractSceneIdFromValue(value);
+        if (id) return id;
+      }
+    }
+
+    return null;
+  }
+
   // Optional group syntax: [[ ... ]]
   // A group is kept only if at least one token inside has a non-empty value.
   function applyOptionalBlocks(tmpl, tok) {
@@ -736,19 +831,23 @@
           (s.files || []).some(f => f.path.replace(/\\/g,"/").toLowerCase().startsWith(norm))
         );
       }
-
       const plans = [];
       for (const scene of scenes) {
         const root = resolveRoot(scene);
         for (const file of (scene.files || [])) {
           if (!root) { plans.push({ title: scene.title, src: file.path, skip: true, reason: "No matching root" }); continue; }
-          const rendered = renderTemplate(root.template || "", scene, file);
-          const sep = pathSepForRoot(root.path || "");
-          const parts = rendered.replace(/\\/g, "/").split("/");
-          const destFolder = [root.path.replace(/[/\\]+$/, ""), ...parts.slice(0, -1)].join(sep);
-          const dest = destFolder + sep + parts[parts.length - 1];
-          const same = file.path.replace(/\\/g,"/").toLowerCase() === dest.replace(/\\/g,"/").toLowerCase();
-          plans.push({ title: scene.title, src: file.path, dest, skip: same, reason: same ? "Already correct" : null });
+          try {
+            const rendered = renderTemplate(root.template || "", scene, file);
+            const sep = pathSepForRoot(root.path || file.path || "");
+            const parts = rendered.replace(/\\/g, "/").split("/");
+            const baseFolder = resolveDestinationBase(root.path || "", rendered, file.path || "");
+            const destFolder = joinDestFolder(baseFolder, parts.slice(0, -1), sep);
+            const dest = joinDestPath(destFolder, parts[parts.length - 1], sep);
+            const same = file.path.replace(/\\/g,"/").toLowerCase() === dest.replace(/\\/g,"/").toLowerCase();
+            plans.push({ title: scene.title, src: file.path, dest, skip: same, reason: same ? "Already correct" : null });
+          } catch (e) {
+            plans.push({ title: scene.title, src: file.path, skip: true, reason: e.message });
+          }
         }
       }
       return plans;
@@ -909,11 +1008,141 @@
     });
   }
 
+  function pathSepForRoot(rootPath) {
+    const p = rootPath || "";
+    if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\")) return "\\";
+    if (p.includes("\\") && !p.includes("/")) return "\\";
+    return "/";
+  }
+
+  function isAbsoluteTemplatePath(path) {
+    const p = (path || "").replace(/\\/g, "/");
+    return p.startsWith("/") || p.startsWith("//") || /^[A-Za-z]:\//.test(p);
+  }
+
+  function resolveDestinationBase(rootPath, renderedPath, srcPath) {
+    const root = (rootPath || "").trim();
+    if (root) return root.replace(/[/\\]+$/, "");
+    const rendered = (renderedPath || "").replace(/\\/g, "/");
+    if (isAbsoluteTemplatePath(rendered)) {
+      if (rendered.startsWith("//")) return "//";
+      if (rendered.startsWith("/")) return "/";
+      return "";
+    }
+    throw new Error("Relative template requires a configured root path");
+  }
+
+  function joinDestFolder(baseFolder, subParts, sep) {
+    if (!subParts.length) return baseFolder;
+    if (baseFolder === "/" && sep === "/") return "/" + subParts.join("/");
+    if (baseFolder === "//" && sep === "/") return "//" + subParts.join("/");
+    if (!baseFolder) return subParts.join(sep);
+    return [baseFolder, ...subParts].join(sep);
+  }
+
+  function joinDestPath(destFolder, basename, sep) {
+    if (!destFolder) return basename;
+    if (destFolder === "/" && sep === "/") return "/" + basename;
+    if (destFolder === "//" && sep === "/") return "//" + basename;
+    return destFolder + sep + basename;
+  }
+
+  function extractSceneIdFromValue(value) {
+    const m = String(value || "").match(/(?:^|\/)scenes?\/(\d+)(?:\/|$|[?#])/);
+    return m ? m[1] : null;
+  }
+
+  function extractSceneIdFromElement(el) {
+    if (!el || el.nodeType !== 1) return null;
+
+    const directValues = [
+      el.getAttribute?.("href"),
+      el.getAttribute?.("src"),
+      el.getAttribute?.("poster"),
+      el.getAttribute?.("data-id"),
+      el.getAttribute?.("data-scene-id"),
+      el.id,
+    ];
+    for (const value of directValues) {
+      const id = extractSceneIdFromValue(value);
+      if (id) return id;
+    }
+
+    const descendants = el.querySelectorAll("[href], [src], [poster], [data-id], [data-scene-id], video, img, source");
+    for (const node of descendants) {
+      const values = [
+        node.getAttribute?.("href"),
+        node.getAttribute?.("src"),
+        node.getAttribute?.("poster"),
+        node.getAttribute?.("data-id"),
+        node.getAttribute?.("data-scene-id"),
+        node.src,
+        node.currentSrc,
+        node.poster,
+      ];
+      for (const value of values) {
+        const id = extractSceneIdFromValue(value);
+        if (id) return id;
+      }
+    }
+
+    return null;
+  }
+
+  function getSceneContainer(node) {
+    let el = node && node.nodeType === 1 ? node : node?.parentElement;
+    if (!el) return null;
+
+    const explicit = el.closest("article, .card, tr, li, [role='row']");
+    if (explicit) return explicit;
+
+    let candidate = el;
+    while (candidate && candidate.parentElement && candidate.parentElement !== document.body) {
+      const display = getComputedStyle(candidate).display;
+      const parent = candidate.parentElement;
+      const hasSingleSceneRef = parent.querySelectorAll("[href], [src], [poster], video, img, source").length <= 8;
+      if (hasSingleSceneRef && ["block", "flex", "grid", "table-row", "list-item"].includes(display)) {
+        return candidate;
+      }
+      candidate = parent;
+    }
+
+    return el.parentElement || el;
+  }
+
+  function applyOptionalBlocks(tmpl, tok) {
+    let r = tmpl || "";
+    const groupRe = /\[\[([\s\S]*?)\]\]/;
+    let guard = 0;
+    while (guard < 1000) {
+      const m = groupRe.exec(r);
+      if (!m) break;
+      guard += 1;
+      const full = m[0];
+      const block = m[1];
+      const refs = [...block.matchAll(/\{(_?[A-Za-z0-9-]+)\}/g)].map(x => x[1]);
+      const keep = refs.some(t => {
+        const key = t.startsWith("_") ? t.slice(1) : t;
+        return Boolean(tok["{" + key + "}"]);
+      });
+      r = r.slice(0, m.index) + (keep ? block : "") + r.slice(m.index + full.length);
+    }
+    return r;
+  }
+
   function loadCfg() {
     try {
       const r = localStorage.getItem(LS_KEY);
-      if (!r) return null;
-      return JSON.parse(r);
+      if (!r) {
+        console.warn("[SM-overlay] No config found in localStorage");
+        return null;
+      }
+      const cfg = JSON.parse(r);
+      if (!cfg || !Array.isArray(cfg.roots)) {
+        console.warn("[SM-overlay] Invalid config shape in localStorage");
+        return null;
+      }
+      return cfg;
     } catch(e) { console.error("[SM-overlay] Config parse error:", e); return null; }
   }
 
@@ -1021,34 +1250,54 @@
 
   // Build dest path applying MAX_PATH truncation, mirrors Python fit_to_max_path
   function buildDest(root, scene, file) {
-    const sep = pathSepForRoot(root.path || "");
+    const sep = pathSepForRoot(root.path || file.path || "");
     const rendered = renderTmpl(root.template || "", scene, file);
     const parts = rendered.replace(/\\/g, "/").split("/");
-    const destFolder = [root.path.replace(/[/\\]+$/, ""), ...parts.slice(0, -1)].join(sep);
+    const baseFolder = resolveDestinationBase(root.path || "", rendered, file.path || "");
+    const destFolder = joinDestFolder(baseFolder, parts.slice(0, -1), sep);
     const rawBasename = parts[parts.length - 1];
     const basename = fitToMaxPath(destFolder, rawBasename, root.template || "", scene, file, sep);
-    return { destFolder, basename, dest: destFolder + sep + basename };
+    return { destFolder, basename, dest: joinDestPath(destFolder, basename, sep) };
   }
 
   function checkScene(scene, cfg) {
-    if (!scene.organized) return null;
     const root = resolveRoot(scene, cfg);
-    if (!root || !root.path) return null;
-    const normRoot = normPath(root.path);
+    if (!root) return null;
 
     let worstStatus = null;
+    let sawEvaluatedFile = false;
+    const debugScene = String(scene.id) === "10373" || String(scene.title || "").includes("Sybil");
     for (const f of (scene.files || [])) {
       const normFile = normPath(f.path);
-      if (normFile.startsWith(normRoot)) {
-        if (root.template) {
-          const { basename: expBase } = buildDest(root, scene, f);
-          const actBase = normPath(f.basename || f.path.split(/[/\\]/).pop());
-          if (expBase && actBase === normPath(expBase)) return null;
-          worstStatus = worstStatus || "filename";
-        } else {
-          return null;
-        }
+      let destFolder, expBase, dest;
+      try {
+        ({ destFolder, basename: expBase, dest } = buildDest(root, scene, f));
+      } catch (e) {
+        if (debugScene) console.warn("[SM-overlay][debug]", "buildDest failed", { sceneId: scene.id, title: scene.title, error: String(e) });
+        return null;
+      }
+      sawEvaluatedFile = true;
+      const normDest = normPath(dest);
+      if (debugScene) {
+        console.log("[SM-overlay][debug]", {
+          sceneId: scene.id,
+          title: scene.title,
+          rootPath: root.path,
+          template: root.template,
+          src: f.path,
+          dest,
+          normFile,
+          normDest,
+          same: normFile === normDest,
+        });
+      }
+      if (normFile === normDest) {
+        continue;
+      }
+      if (normPath((f.path || "").replace(/[/\\][^/\\]*$/, "")) === normPath(destFolder)) {
+        worstStatus = worstStatus || "filename";
       } else {
+        const normRoot = normPath(destFolder);
         const fileDrive = normFile.match(/^([a-z]:)/)?.[1] || "";
         const rootDrive = normRoot.match(/^([a-z]:)/)?.[1] || "";
         if (fileDrive && rootDrive && fileDrive !== rootDrive) {
@@ -1058,7 +1307,8 @@
         }
       }
     }
-    return worstStatus;
+    if (debugScene) console.log("[SM-overlay][debug]", "final status", { sceneId: scene.id, title: scene.title, worstStatus, sawEvaluatedFile });
+    return sawEvaluatedFile ? worstStatus : null;
   }
 
   async function fetchScenes(ids) {
@@ -1113,14 +1363,18 @@
 
   function getDestination(scene, cfg) {
     const root = resolveRoot(scene, cfg);
-    if (!root || !root.path) return null;
+    if (!root) return null;
     const file = (scene.files || [])[0];
     if (!file) return null;
-    return buildDest(root, scene, file).dest;
+    try {
+      return buildDest(root, scene, file).dest;
+    } catch (e) {
+      return null;
+    }
   }
 
   function injectBadge(thumbLink, status, sceneId, cfg) {
-    const card = thumbLink.closest("article") || thumbLink.closest(".card") || thumbLink.parentElement;
+    const card = getSceneContainer(thumbLink);
     if (!card) return;
     card.querySelectorAll(".sm-badge").forEach(e => e.remove());
     if (!status) return;
@@ -1158,34 +1412,53 @@
 
   async function scan() {
     const cfg = loadCfg();
-    if (!cfg || !cfg.roots.length) return;
+    if (!cfg || !cfg.roots.length) {
+      console.warn("[SM-overlay] scan skipped: no configured roots");
+      return;
+    }
 
     const seen = new Set();
     const batch = [];
     const linkMap = {};   // id -> thumbLink
+    const sampledRefs = [];
 
-    document.querySelectorAll("a[href*='/scenes/']").forEach(a => {
-      const m = a.href.match(/\/scenes\/(\d+)/);
-      if (!m || !a.querySelector("img")) return;
-      const id = m[1];
+    document.querySelectorAll("article, .card, li, tr, [role='row']").forEach(card => {
+      const id = extractSceneIdFromElement(card);
+      if (sampledRefs.length < 8) {
+        const media = card.querySelector("[href], [src], [poster], video, img, source");
+        sampledRefs.push(
+          media?.getAttribute?.("href") ||
+          media?.getAttribute?.("src") ||
+          media?.getAttribute?.("poster") ||
+          media?.src ||
+          media?.currentSrc ||
+          media?.poster ||
+          card.className ||
+          card.tagName
+        );
+      }
+      if (!id) return;
       if (seen.has(id)) return;
       seen.add(id);
-      // Check card-level attr to avoid reprocessing
-      const card = a.closest("article") || a.closest(".card") || a.parentElement;
       if (card && card.getAttribute(OVERLAY_ATTR)) return;
       if (card) card.setAttribute(OVERLAY_ATTR, "pending");
-      linkMap[id] = a;
+      linkMap[id] = card.querySelector("a[href], video, img, source") || card;
       if (!sceneCache[id]) batch.push(id);
     });
 
     const total = Object.keys(linkMap).length;
-    if (!total) return;
+    console.log(`[SM-overlay] scan: roots=${cfg.roots.length} links=${total} batch=${batch.length}`);
+    if (!total) {
+      console.warn("[SM-overlay] sample refs", sampledRefs);
+      console.warn("[SM-overlay] scan found no scene links to evaluate");
+      return;
+    }
 
     for (let i = 0; i < batch.length; i += 50) await fetchScenes(batch.slice(i, i+50));
 
     Object.entries(linkMap).forEach(([id, thumbLink]) => {
       try {
-        const card  = thumbLink.closest("article") || thumbLink.closest(".card") || thumbLink.parentElement;
+        const card  = getSceneContainer(thumbLink);
         const scene = sceneCache[id];
         if (!scene) { if (card) card.setAttribute(OVERLAY_ATTR, "no-data"); return; }
         const status = checkScene(scene, cfg);
@@ -1195,6 +1468,16 @@
         console.error("[SM-overlay] scan error for scene", id, e);
       }
     });
+    const counts = { ok: 0, pending: 0, noData: 0, misplaced: 0 };
+    Object.values(linkMap).forEach(link => {
+      const card = getSceneContainer(link);
+      const v = card?.getAttribute(OVERLAY_ATTR);
+      if (v === "ok") counts.ok += 1;
+      else if (v === "pending") counts.pending += 1;
+      else if (v === "no-data") counts.noData += 1;
+      else if (v) counts.misplaced += 1;
+    });
+    console.log("[SM-overlay] scan results", counts);
   }
 
   // ── Scan scheduling — defined early so all code below can reference it ──────
@@ -1207,12 +1490,10 @@
     // Stash marks selected cards with a checked checkbox input
     const ids = [];
     document.querySelectorAll("input[type='checkbox']:checked").forEach(cb => {
-      const card = cb.closest("article") || cb.closest(".card") || cb.parentElement;
+      const card = getSceneContainer(cb);
       if (!card) return;
-      const link = card.querySelector("a[href*='/scenes/']");
-      if (!link) return;
-      const m = link.href.match(/\/scenes\/(\d+)/);
-      if (m) ids.push(m[1]);
+      const id = extractSceneIdFromElement(card);
+      if (id) ids.push(id);
     });
     return [...new Set(ids)];
   }
@@ -1325,6 +1606,7 @@
 
     btn.addEventListener("click", () => {
       _filterActive = !_filterActive;
+      console.log(`[SM-overlay] filter toggled: active=${_filterActive}`);
       applyFilter(_filterActive);
       btn.classList.toggle("btn-secondary", !_filterActive);
       btn.classList.toggle("btn-primary",   _filterActive);
